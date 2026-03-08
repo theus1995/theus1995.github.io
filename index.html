@@ -123,6 +123,10 @@ input:checked+.slider:before{transform:translateX(20px);}
 .dev-lock{display:flex;flex-direction:column;align-items:center;justify-content:center;padding:40px;gap:16px;text-align:center;}
 
 </style>
+
+  <!-- Firebase -->
+  <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore-compat.js"></script>
 </head>
 <body>
 
@@ -180,7 +184,8 @@ input:checked+.slider:before{transform:translateX(20px);}
     <div id="nav-menu" style="flex:1;overflow-y:auto;"></div>
     <div style="padding:14px 14px 20px;border-top:1px solid var(--border);">
       <div class="text-xs text-muted mb8">Logado como</div>
-      <div id="user-name" class="fw700 text-white text-sm"></div>
+      <div id="fb-status" style="font-size:10px;color:var(--muted);padding:2px 8px;border-radius:10px;background:var(--card);margin-right:8px;" title="Status Firebase">⏳</div>
+        <div id="user-name" class="fw700 text-white text-sm"></div>
       <div id="user-cargo" class="text-xs text-accent mb8"></div>
       <button onclick="manualExport()" class="btn btn-green btn-full mb8" style="font-size:13px;padding:9px;">📥 Exportar Excel</button>
       <label class="btn btn-ghost btn-full mb8" style="font-size:13px;padding:9px;cursor:pointer;text-align:center;display:block;">
@@ -362,6 +367,101 @@ function buildMsg(template, vars) {
 <input type="file" id="pendrive-input" accept=".xlsx,.json" style="display:none;" onchange="loadFromPendrive(this)"/>
 
 <script>
+// ══════════════════════════════════════════════════════════
+// FIREBASE — Banco de dados compartilhado em tempo real
+// ══════════════════════════════════════════════════════════
+const FB_CONFIG = {
+  apiKey: "AIzaSyALLBat-Y2WUll1uM9obdIDtBjcmMhQqsU",
+  authDomain: "clinicacolosso-bec16.firebaseapp.com",
+  projectId: "clinicacolosso-bec16",
+  storageBucket: "clinicacolosso-bec16.firebasestorage.app",
+  messagingSenderId: "386843512583",
+  appId: "1:386843512583:web:5a51cbe7a47427268cffa2"
+};
+
+let fbApp, fbDB, fbUnsubscribe;
+let _fbReady = false;
+let _localMode = false; // fallback se Firebase falhar
+
+function initFirebase() {
+  try {
+    fbApp = firebase.initializeApp(FB_CONFIG);
+    fbDB  = firebase.firestore();
+    fbDB.enablePersistence({synchronizeTabs: true}).catch(()=>{});
+    console.log('✅ Firebase conectado');
+    const s=document.getElementById('fb-status');if(s)s.textContent='☁️';
+    _fbReady = true;
+    loadFromFirebase();
+  } catch(e) {
+    console.warn('Firebase falhou, modo local:', e);
+    const s=document.getElementById('fb-status');if(s){s.textContent='💾';s.title='Modo local';}
+    _localMode = true;
+  }
+}
+
+// ── Carregar dados do Firebase ──────────────────────────────
+function loadFromFirebase() {
+  if (!_fbReady) return;
+  // Escuta mudanças em tempo real
+  fbUnsubscribe = fbDB.collection('clinica').doc('dados')
+    .onSnapshot(snap => {
+      if (snap.exists) {
+        const remote = snap.data();
+        // Mescla mantendo estrutura
+        const keys = ['clientes','pets','funcionarios','servicos','agenda',
+          'atendimentos','vacinas','estoque','caixa','fretes','internacoes',
+          'hoteis','configuracoes'];
+        keys.forEach(k => {
+          if (remote[k] !== undefined) DB[k] = remote[k];
+        });
+        // Atualiza tela se já logado
+        if (currentUser) {
+          // Revalida currentUser com dados novos
+          const u = DB.funcionarios.find(f => f.id === currentUser.id);
+          if (u) currentUser = u;
+          renderPage(currentPage || 'dashboard');
+          buildNav();
+        }
+        console.log('🔄 Dados sincronizados do Firebase');
+        const s=document.getElementById('fb-status');if(s){s.textContent='✅';s.title='Sincronizado';setTimeout(()=>{if(s)s.textContent='☁️';},2000);}
+      } else {
+        // Primeira vez: salva dados locais no Firebase
+        saveToFirebase();
+      }
+    }, err => {
+      console.warn('Erro ao escutar Firebase:', err);
+      _localMode = true;
+    });
+}
+
+// ── Salvar dados no Firebase ───────────────────────────────
+let _saveTimer = null;
+function saveToFirebase() {
+  if (!_fbReady || _localMode) return;
+  // Debounce: espera 800ms para agrupar múltiplos saves seguidos
+  clearTimeout(_saveTimer);
+  _saveTimer = setTimeout(async () => {
+    try {
+      const data = {
+        clientes: DB.clientes||[], pets: DB.pets||[],
+        funcionarios: DB.funcionarios||[], servicos: DB.servicos||[],
+        agenda: DB.agenda||[], atendimentos: DB.atendimentos||[],
+        vacinas: DB.vacinas||[], estoque: DB.estoque||[],
+        caixa: DB.caixa||[], fretes: DB.fretes||[],
+        internacoes: DB.internacoes||[], hoteis: DB.hoteis||[],
+        configuracoes: DB.configuracoes||{},
+        _updatedAt: new Date().toISOString(),
+        _updatedBy: currentUser ? currentUser.nome : 'sistema'
+      };
+      await fbDB.collection('clinica').doc('dados').set(data);
+      console.log('💾 Salvo no Firebase por', data._updatedBy);
+    } catch(e) {
+      console.warn('Erro ao salvar Firebase:', e);
+    }
+  }, 800);
+}
+
+
 // ══════════════════════════════════════════════════════════
 // INITIAL DATA
 // ══════════════════════════════════════════════════════════
@@ -3232,6 +3332,8 @@ function installApp(){
 // INIT
 // ══════════════════════════════════════════════════════════
 loadDB();
+// Inicia Firebase (dados em nuvem sobrescrevem local quando chegarem)
+window.addEventListener('load', () => initFirebase());
 if(DB.configuracoes&&DB.configuracoes.senhaAlterada){
   document.getElementById("login-hint").style.display="none";
 }
