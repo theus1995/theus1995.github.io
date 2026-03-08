@@ -421,7 +421,17 @@ function loadDB(){
     const s=localStorage.getItem("petshop_colosso");
     if(s){
       DB=JSON.parse(s);
+      // Migrações: garante que todos os arrays existem
       if(!DB.configuracoes)DB.configuracoes=Object.assign({},INITIAL.configuracoes);
+      if(!DB.funcionarios||!Array.isArray(DB.funcionarios)||DB.funcionarios.length===0)DB.funcionarios=JSON.parse(JSON.stringify(INITIAL.funcionarios));
+      if(!DB.clientes)DB.clientes=[];
+      if(!DB.pets)DB.pets=[];
+      if(!DB.servicos)DB.servicos=[];
+      if(!DB.agenda)DB.agenda=[];
+      if(!DB.atendimentos)DB.atendimentos=[];
+      if(!DB.vacinas)DB.vacinas=[];
+      if(!DB.estoque)DB.estoque=[];
+      if(!DB.caixa)DB.caixa=[];
     }else{DB=JSON.parse(JSON.stringify(INITIAL));}
   }catch{DB=JSON.parse(JSON.stringify(INITIAL));}
 }
