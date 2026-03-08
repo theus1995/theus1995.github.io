@@ -481,7 +481,19 @@ function importExcel(inp){
 // ==========================================================
 // HELPERS
 // ==========================================================
-const uid=()=>Date.now()+Math.floor(Math.random()*10000);
+const uid=()=>{
+  const allIds=[
+    ...(DB.clientes||[]),
+    ...(DB.pets||[]),
+    ...(DB.agenda||[]),
+    ...(DB.atendimentos||[]),
+    ...(DB.estoque||[]),
+    ...(DB.servicos||[]),
+    ...(DB.funcionarios||[]),
+    ...(DB.caixa||[]),
+  ].map(x=>parseInt(x.id)||0);
+  return allIds.length>0?Math.max(...allIds)+1:1;
+};
 const fmtDate=d=>{if(!d)return"—";try{const[y,m,dd]=d.split("-");return`${dd}/${m}/${y}`;}catch{return d;}};
 const today=()=>new Date().toISOString().slice(0,10);
 const esc=s=>String(s||"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
