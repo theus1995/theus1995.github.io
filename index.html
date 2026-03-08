@@ -7,6 +7,9 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"/>
 <title>Pet Shop Colosso</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-firestore-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-storage-compat.js"></script>
 <script src="https://accounts.google.com/gsi/client" async defer></script>
 <script src="https://apis.google.com/js/api.js" async defer></script>
 <style>
@@ -168,10 +171,7 @@ input:checked+.slider:before{transform:translateX(20px);}
       <div class="text-xs text-muted mb8">Logado como</div>
       <div id="user-name" class="fw700 text-white text-sm"></div>
       <div id="user-cargo" class="text-xs text-accent mb8"></div>
-      <div id="firebase-status" style="display:flex;align-items:center;gap:5px;margin-bottom:10px;padding:5px 8px;background:rgba(34,197,94,0.1);border:1px solid rgba(34,197,94,0.3);border-radius:6px;">
-        <span style="width:7px;height:7px;border-radius:50%;background:#22c55e;display:inline-block;box-shadow:0 0 6px #22c55e;animation:pulse-dot 2s infinite;"></span>
-        <span style="font-size:11px;color:#22c55e;font-weight:600;">Firebase conectado</span>
-      </div>
+      <div id="firebase-status" style="display:flex;align-items:center;gap:5px;margin-bottom:10px;padding:5px 8px;background:rgba(244,63,94,0.1);border:1px solid rgba(244,63,94,0.3);border-radius:6px;"><span style="width:7px;height:7px;border-radius:50%;background:#f43f5e;display:inline-block;box-shadow:0 0 6px #f43f5e;animation:pulse-dot 2s infinite;"></span><span style="font-size:11px;color:#f43f5e;font-weight:600;">Conectando...</span></div>
       <button onclick="manualExport()" class="btn btn-green btn-full mb8" style="font-size:13px;padding:9px;">📥 Exportar Excel</button>
       <label class="btn btn-ghost btn-full mb8" style="font-size:13px;padding:9px;cursor:pointer;text-align:center;display:block;">
         📤 Importar Excel<input type="file" accept=".xlsx" onchange="importExcel(this)" style="display:none;"/>
@@ -353,6 +353,57 @@ function buildMsg(template, vars) {
 
 <script>
 // ==========================================================
+// FIREBASE
+// ==========================================================
+var _fbDb=null,_fbStorage=null,_fbReady=false;
+function initFirebase(){
+  try{
+    if(typeof firebase==="undefined"){_fbSetStatus(false);return;}
+    firebase.initializeApp({apiKey:"AIzaSyALLBat-Y2WUll1uM9obdIDtBjcmMhQqsU",authDomain:"clinicacolosso-bec16.firebaseapp.com",projectId:"clinicacolosso-bec16",storageBucket:"clinicacolosso-bec16.firebasestorage.app",messagingSenderId:"386843512583",appId:"1:386843512583:web:5a51cbe7a47427260cffa2"});
+    _fbDb=firebase.firestore();_fbStorage=firebase.storage();_fbReady=true;
+    _fbSetStatus(true);_fbLoad();
+  }catch(e){console.warn("Firebase:",e);_fbSetStatus(false);}
+}
+function _fbSetStatus(ok){
+  var dot=document.querySelector("#firebase-status span:first-child");
+  var text=document.querySelector("#firebase-status span:last-child");
+  if(!dot||!text)return;
+  dot.style.background=ok?"#22c55e":"#f43f5e";
+  dot.style.boxShadow=ok?"0 0 6px #22c55e":"0 0 6px #f43f5e";
+  text.textContent=ok?"Firebase conectado":"Firebase offline";
+  text.style.color=ok?"#22c55e":"#f43f5e";
+}
+function _fbSave(){
+  if(!_fbReady)return;
+  _fbDb.collection("petshop").doc("colosso").set(JSON.parse(JSON.stringify(DB))).catch(function(e){console.warn("fbSave:",e);});
+}
+function _fbLoad(){
+  if(!_fbReady)return;
+  _fbDb.collection("petshop").doc("colosso").get().then(function(snap){
+    if(snap.exists){var r=snap.data();Object.keys(r).forEach(function(k){if(r[k]!==undefined)DB[k]=r[k];});saveDB(false);if(typeof renderPage==="function"&&currentUser)renderPage(currentPage||"dashboard");}
+  }).catch(function(e){console.warn("fbLoad:",e);});
+  _fbDb.collection("petshop").doc("colosso").onSnapshot(function(snap){
+    if(!snap.exists)return;var r=snap.data();Object.keys(r).forEach(function(k){if(r[k]!==undefined)DB[k]=r[k];});saveDB(false);if(typeof renderPage==="function"&&currentUser)renderPage(currentPage||"dashboard");
+  });
+}
+function _fbUploadPetPhoto(petId,file,cb){
+  if(!_fbReady){cb(null,"Firebase não conectado");return;}
+  var ext=file.name.split(".").pop();
+  var ref=_fbStorage.ref("pets/"+petId+"/foto."+ext);
+  ref.put(file).then(function(){return ref.getDownloadURL();}).then(function(url){cb(url,null);}).catch(function(e){cb(null,e.message);});
+}
+function previewPetPhoto(input){
+  var file=input.files[0];if(!file)return;
+  var preview=document.getElementById("pet-photo-preview");
+  var status=document.getElementById("pet-photo-status");
+  var reader=new FileReader();
+  reader.onload=function(e){
+    if(preview)preview.innerHTML='<img src="'+e.target.result+'" style="width:72px;height:72px;border-radius:12px;object-fit:cover;border:2px solid var(--accent)"/>';
+    if(status)status.textContent="✅ "+file.name;
+  };
+  reader.readAsDataURL(file);
+}
+// ============================================================
 // INITIAL DATA
 // ==========================================================
 const INITIAL = {
@@ -415,30 +466,22 @@ let currentPage="dashboard";
 // ==========================================================
 // STORAGE
 // ==========================================================
-function saveDB(){try{localStorage.setItem("petshop_colosso",JSON.stringify(DB));}catch(e){}}
+function saveDB(pushToFb){if(pushToFb===undefined)pushToFb=true;try{localStorage.setItem("petshop_colosso",JSON.stringify(DB));}catch(e){}if(pushToFb)_fbSave();}
 function loadDB(){
   try{
     const s=localStorage.getItem("petshop_colosso");
     if(s){
       DB=JSON.parse(s);
+      if(!DB.configuracoes)DB.configuracoes=Object.assign({},INITIAL.configuracoes);
       if(!DB.funcionarios||!Array.isArray(DB.funcionarios)||DB.funcionarios.length===0)
         DB.funcionarios=JSON.parse(JSON.stringify(INITIAL.funcionarios));
-      if(!DB.configuracoes)DB.configuracoes=Object.assign({},INITIAL.configuracoes);
-      if(!DB.fretes)DB.fretes=[];
-      if(!DB.internacoes)DB.internacoes=[];
-      if(!DB.hoteis)DB.hoteis=[];
-      if(!DB.configuracoes.valorKmFrete)DB.configuracoes.valorKmFrete="2.50";
-      if(!DB.configuracoes.msgFrete)DB.configuracoes.msgFrete="🚗 *Confirmação de Frete*\n\nOlá, {cliente}! Confirmamos a coleta do seu pet *{pet}* no endereço: *{endereco}*.\nData: *{data}* às *{hora}*.\nValor do frete: R$ *{valor}*.\n\nPet Shop Colosso 🐾";
-      if(!DB.configuracoes.msgHotel)DB.configuracoes.msgHotel="🏨 *Check-in Hotel Pet*\n\nOlá, {cliente}! Check-in do *{pet}* confirmado!\nPeríodo: *{checkin}* a *{checkout}* ({dias} dias).\nValor: R$ *{valor}*.\n\nPet Shop Colosso 🐾";
-      if(!DB.configuracoes.msgInternacao)DB.configuracoes.msgInternacao="🏥 *Internação Confirmada*\n\nOlá, {cliente}! A internação do *{pet}* foi registrada.\nMotivo: *{motivo}*.\nData: *{data}*.\nVeterinário: *{vet}*.\n\nPet Shop Colosso 🐾";
-    }else{
-      DB=JSON.parse(JSON.stringify(INITIAL));
-      DB.fretes=[];DB.internacoes=[];DB.hoteis=[];
-    }
-  }catch{
-    DB=JSON.parse(JSON.stringify(INITIAL));
-    DB.fretes=[];DB.internacoes=[];DB.hoteis=[];
-  }
+      if(!DB.clientes)DB.clientes=[];if(!DB.pets)DB.pets=[];if(!DB.servicos)DB.servicos=[];
+      if(!DB.agenda)DB.agenda=[];if(!DB.atendimentos)DB.atendimentos=[];if(!DB.vacinas)DB.vacinas=[];
+      if(!DB.estoque)DB.estoque=[];if(!DB.caixa)DB.caixa=[];
+      var _nId=100;
+      [DB.clientes,DB.pets,DB.agenda,DB.atendimentos,DB.estoque,DB.servicos,DB.funcionarios,DB.caixa].forEach(function(arr){(arr||[]).forEach(function(x){if(parseInt(x.id)>100000)x.id=_nId++;});});
+    }else{DB=JSON.parse(JSON.stringify(INITIAL));}
+  }catch(e){DB=JSON.parse(JSON.stringify(INITIAL));}
 }
 
 // ==========================================================
@@ -481,19 +524,7 @@ function importExcel(inp){
 // ==========================================================
 // HELPERS
 // ==========================================================
-const uid=()=>{
-  const allIds=[
-    ...(DB.clientes||[]),
-    ...(DB.pets||[]),
-    ...(DB.agenda||[]),
-    ...(DB.atendimentos||[]),
-    ...(DB.estoque||[]),
-    ...(DB.servicos||[]),
-    ...(DB.funcionarios||[]),
-    ...(DB.caixa||[]),
-  ].map(x=>parseInt(x.id)||0);
-  return allIds.length>0?Math.max(...allIds)+1:1;
-};
+function uid(){var a=[];[DB.clientes,DB.pets,DB.agenda,DB.atendimentos,DB.estoque,DB.servicos,DB.funcionarios,DB.caixa].forEach(function(arr){(arr||[]).forEach(function(x){var n=parseInt(x.id);if(n>0&&n<100000)a.push(n);});});return a.length>0?Math.max.apply(null,a)+1:1;}
 const fmtDate=d=>{if(!d)return"—";try{const[y,m,dd]=d.split("-");return`${dd}/${m}/${y}`;}catch{return d;}};
 const today=()=>new Date().toISOString().slice(0,10);
 const esc=s=>String(s||"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
@@ -649,9 +680,6 @@ const NAV=[
   {id:"funcionarios",icon:"👨‍💼",label:"Funcionários"},
   {id:"whatsapp",icon:"💬",label:"WhatsApp"},
   {id:"relatorios",icon:"📈",label:"Relatórios"},
-  {id:"frete",icon:"🚗",label:"Frete"},
-  {id:"internacao",icon:"🏥",label:"Internação"},
-  {id:"hotel",icon:"🏨",label:"Hotel Pet"},
   {id:"configuracoes",icon:"🔧",label:"Configurações"},
 ];
 function buildNav(){
@@ -704,9 +732,6 @@ function renderPage(p){
     case"funcionarios":el.innerHTML=pageFuncionarios();break;
     case"whatsapp":el.innerHTML=pageWhatsApp();break;
     case"relatorios":el.innerHTML=pageRelatorios();break;
-    case"frete":el.innerHTML=pageFrete();break;
-    case"internacao":el.innerHTML=pageInternacao();break;
-    case"hotel":el.innerHTML=pageHotel();break;
     case"configuracoes":el.innerHTML=pageConfiguracoes();break;
   }
 }
@@ -855,7 +880,7 @@ function pagePets(){
     <th>Nome</th><th class="hide-mobile">Espécie</th><th class="hide-mobile">Raça</th><th class="hide-mobile">Sexo</th><th class="hide-mobile">Peso</th><th>Tutor</th><th>Ações</th>
   </tr></thead><tbody id="tbody-pets">
   ${DB.pets.map(p=>`<tr>
-    <td class="fw700 text-white">${esc(p.nome)}</td>
+    <td><div style="display:flex;align-items:center;gap:10px;">${p.foto?'<img src="'+p.foto+'" style="width:36px;height:36px;border-radius:50%;object-fit:cover;border:2px solid var(--accent);flex-shrink:0;"/>':`<div style="width:36px;height:36px;border-radius:50%;background:var(--accent-soft);display:flex;align-items:center;justify-content:center;flex-shrink:0;">🐾</div>`}<span class="fw700 text-white">${esc(p.nome)}</span></div></td>
     <td class="hide-mobile">${esc(p.especie)}</td>
     <td class="hide-mobile">${esc(p.raca)}</td>
     <td class="hide-mobile">${esc(p.sexo)}</td>
@@ -886,30 +911,36 @@ function petForm(p={}){
     <div><label>Alergias</label><input id="f-alergia" value="${esc(p.alergias||"")}" placeholder="Ex: Dipirona"/></div>
     <div><label>Medicamentos</label><input id="f-medic" value="${esc(p.medicamentos||"")}"/></div>
   </div>
-  <div><label>Observações</label><input id="f-obs" value="${esc(p.obs||"")}"/></div>`;
+  <div><label>Observações</label><input id="f-obs" value="${esc(p.obs||"")}"/></div>
+  <div style="margin-top:14px;"><label style="display:block;margin-bottom:6px;font-weight:600;">📷 Foto do Pet</label><div id="pet-photo-preview" style="margin-bottom:8px;">${p.foto ? "<img src=\"" + p.foto + "\" style=\"width:72px;height:72px;border-radius:12px;object-fit:cover;border:2px solid var(--accent)\"/>" : ""}</div><label style="display:inline-flex;align-items:center;gap:8px;padding:8px 14px;background:var(--accent-soft);color:var(--accent);border-radius:8px;cursor:pointer;font-size:13px;font-weight:600;border:1px solid var(--accent);">📷 ${p.foto ? "Trocar Foto" : "Adicionar Foto"}<input type="file" id="f-foto" accept="image/*" style="display:none;" onchange="previewPetPhoto(this)"/></label><div id="pet-photo-status" style="font-size:11px;color:var(--muted);margin-top:6px;"></div></div>`;
 }
 function openAddPet(){
-  openModal("Novo Pet",petForm(),()=>{
-    const nome=document.getElementById("f-nomePet").value.trim();
-    const cId=document.getElementById("f-clienteId").value;
+  openModal("Novo Pet",petForm(),function(){
+    var nome=document.getElementById("f-nomePet").value.trim();
+    var cId=document.getElementById("f-clienteId").value;
     if(!nome||!cId){showToast("❌ Nome e tutor são obrigatórios","var(--rose)");return;}
-    DB.pets.push({id:uid(),nome,clienteId:cId,especie:document.getElementById("f-especie").value,
+    var newId=uid();
+    var petData={id:newId,nome:nome,clienteId:cId,especie:document.getElementById("f-especie").value,
       raca:document.getElementById("f-raca").value,sexo:document.getElementById("f-sexo").value,
       nascimento:document.getElementById("f-nasc").value,peso:document.getElementById("f-peso").value,
       alergias:document.getElementById("f-alergia").value,medicamentos:document.getElementById("f-medic").value,
-      obs:document.getElementById("f-obs").value});
-    saveDB();closeModal();renderPage("pets");showToast("✅ Pet adicionado!");
+      obs:document.getElementById("f-obs").value,foto:""};
+    DB.pets.push(petData);saveDB();closeModal();renderPage("pets");showToast("✅ Pet adicionado!");
+    var fi=document.getElementById("f-foto");
+    if(fi&&fi.files&&fi.files[0]){_fbUploadPetPhoto(newId,fi.files[0],function(url){if(url){petData.foto=url;saveDB();}});}
   });
 }
 function editPet(id){
   const p=DB.pets.find(x=>x.id===id);if(!p)return;
-  openModal("Editar Pet",petForm(p),()=>{
+  openModal("Editar Pet",petForm(p),function(){
     Object.assign(p,{nome:document.getElementById("f-nomePet").value,clienteId:document.getElementById("f-clienteId").value,
       especie:document.getElementById("f-especie").value,raca:document.getElementById("f-raca").value,
       sexo:document.getElementById("f-sexo").value,nascimento:document.getElementById("f-nasc").value,
       peso:document.getElementById("f-peso").value,alergias:document.getElementById("f-alergia").value,
       medicamentos:document.getElementById("f-medic").value,obs:document.getElementById("f-obs").value});
     saveDB();closeModal();renderPage("pets");showToast("✅ Pet atualizado!");
+    var fi=document.getElementById("f-foto");
+    if(fi&&fi.files&&fi.files[0]){_fbUploadPetPhoto(p.id,fi.files[0],function(url){if(url){p.foto=url;saveDB();renderPage("pets");}});}
   });
 }
 function delPet(id){if(confirm("Remover este pet?")){DB.pets=DB.pets.filter(p=>p.id!==id);saveDB();renderPage("pets");showToast("🗑️ Removido","var(--rose)");}}
@@ -2182,10 +2213,7 @@ function updateCloudStatus(state){
   const tx=document.getElementById("cloud-text");
   if(!el)return;
   if(state==="connected"){el.style.display="flex";el.style.borderColor="var(--green)";ic.textContent="☁️";tx.textContent="Drive OK";tx.style.color="var(--green)";}
-  else if(state==="syncing"){
-    el.style.display="flex";el.style.borderColor="var(--green)";
-    ic.textContent="☁️";tx.textContent="Drive OK";tx.style.color="var(--green)";
-  }
+  else if(state==="syncing"){el.style.display="flex";el.style.borderColor="var(--green)";ic.textContent="☁️";tx.textContent="Drive OK";tx.style.color="var(--green)";}
   else if(state==="error"){el.style.display="flex";el.style.borderColor="var(--rose)";ic.textContent="❌";tx.textContent="Erro Drive";tx.style.color="var(--rose)";}
   else if(state==="connecting"){el.style.display="flex";el.style.borderColor="var(--accent)";ic.textContent="🔗";tx.textContent="Conectando...";tx.style.color="var(--accent)";}
   else{el.style.display="none";}
@@ -2431,695 +2459,13 @@ if(DB.configuracoes&&DB.configuracoes.senhaAlterada){
 }
 // Init Google Drive if client ID exists
 window.addEventListener("load",()=>{
+  setTimeout(function(){initFirebase();},400);
   setTimeout(()=>{
     if(DB.configuracoes&&DB.configuracoes.googleClientId){
       try{gdInit();}catch(e){}
     }
   },1500);
 });
-
-
-// ==============================================
-// MÓDULOS: FRETE · INTERNAÇÃO · HOTEL PET
-// ==============================================
-
-function calcFrete(distKm){
-  const valorKm=parseFloat(DB.configuracoes.valorKmFrete||"2.50");
-  const base=parseFloat(DB.configuracoes.taxaBaseFrete||"0");
-  return (base + (distKm*valorKm)).toFixed(2);
-}
-
-
-function pageFrete(){
-  const fretes=DB.fretes||[];
-  const totalFrete=fretes.reduce((s,f)=>s+parseFloat(f.valor||0),0);
-  const pendentes=fretes.filter(f=>f.status==="Pendente").length;
-  return`
-  <div class="page-header">
-    <div><div class="page-title">🚗 Frete — Coleta em Domicílio</div>
-    <div class="page-sub">${fretes.length} coleta(s) · R$ ${totalFrete.toFixed(2)} em fretes</div></div>
-    <button class="btn btn-accent" onclick="openAddFrete()">+ Nova Coleta</button>
-  </div>
-
-  <div class="stat-grid mb16">
-    <div class="stat-card"><div class="stat-icon" style="background:#4f8ef722">🚗</div><div><div class="stat-val">${fretes.length}</div><div class="stat-label">Total Coletas</div></div></div>
-    <div class="stat-card"><div class="stat-icon" style="background:#fbbf2422">⏳</div><div><div class="stat-val">${pendentes}</div><div class="stat-label">Pendentes</div></div></div>
-    <div class="stat-card"><div class="stat-icon" style="background:#22c55e22">💰</div><div><div class="stat-val" style="font-size:16px;">R$ ${totalFrete.toFixed(2)}</div><div class="stat-label">Receita Fretes</div></div></div>
-    <div class="stat-card"><div class="stat-icon" style="background:#2dd4bf22">📍</div><div><div class="stat-val">R$ ${parseFloat(DB.configuracoes.valorKmFrete||"2.50").toFixed(2)}</div><div class="stat-label">Valor por KM</div></div></div>
-  </div>
-
-  <div class="card mb16" style="background:linear-gradient(135deg,#1a2a1a,var(--card));border-color:#2a5a2a;">
-    <div class="fw700 text-white mb12" style="font-size:15px;">⚙️ Configuração de Frete</div>
-    <div class="field-group">
-      <div>
-        <label>💰 Valor por KM (R$)</label>
-        <input type="number" id="frete-km-val" value="${esc(DB.configuracoes.valorKmFrete||'2.50')}" step="0.10" min="0" oninput="updateFretePreview()"/>
-      </div>
-      <div>
-        <label>🏠 Taxa Base (R$) — opcional</label>
-        <input type="number" id="frete-base-val" value="${esc(DB.configuracoes.taxaBaseFrete||'0')}" step="0.50" min="0" oninput="updateFretePreview()"/>
-      </div>
-      <div>
-        <label>🧮 Simulador: Distância (km)</label>
-        <input type="number" id="frete-sim-km" value="5" step="0.5" min="0" oninput="updateFretePreview()"/>
-      </div>
-    </div>
-    <div style="background:var(--bg);border-radius:10px;padding:12px 16px;display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;flex-wrap:wrap;gap:10px;">
-      <div class="text-sm text-muted">Frete estimado para <strong id="frete-sim-dist">5</strong> km:</div>
-      <div id="frete-sim-result" class="fw700 text-green" style="font-size:18px;">R$ ${calcFrete(5)}</div>
-    </div>
-    <button onclick="saveFreteConfig()" class="btn btn-accent" style="padding:10px 24px;font-size:14px;">💾 Salvar Configuração</button>
-  </div>
-
-  <div class="search-wrap mb16"><span class="search-icon">🔍</span>
-    <input id="search-frete" placeholder="Buscar por cliente, pet ou endereço..." oninput="filterTable('search-frete','tbody-frete')"/>
-  </div>
-  <div class="card"><div class="tbl-wrap"><table><thead><tr>
-    <th>Data</th><th>Cliente</th><th>Pet</th><th class="hide-mobile">Endereço</th><th class="hide-mobile">Distância</th><th>Valor</th><th>Status</th><th>Ações</th>
-  </tr></thead><tbody id="tbody-frete">
-  ${fretes.length===0?'<tr><td colspan="8" style="text-align:center;color:var(--muted);padding:24px;">Nenhuma coleta registrada</td></tr>':""}
-  ${[...fretes].sort((a,b)=>(b.data||"").localeCompare(a.data||"")).map(fr=>{
-    const stColor=fr.status==="Concluído"?"var(--green)":fr.status==="Em rota"?"var(--amber)":"var(--teal)";
-    return`<tr>
-    <td class="fw700">${fmtDate(fr.data)}</td>
-    <td>${esc(fr.cliente)}</td>
-    <td class="fw700 text-white">${esc(fr.pet)}</td>
-    <td class="hide-mobile text-muted" style="max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(fr.endereco)}</td>
-    <td class="hide-mobile text-muted">${esc(fr.distancia||'—')} km</td>
-    <td class="fw700 text-green">R$ ${esc(fr.valor)}</td>
-    <td><span class="badge" style="background:${stColor}22;color:${stColor}">${esc(fr.status)}</span></td>
-    <td style="white-space:nowrap">
-      <button onclick="waMsgFrete(${fr.id})" title="WhatsApp" style="background:#128C7E22;color:#25D366;border:none;border-radius:8px;padding:6px 9px;font-size:14px;cursor:pointer;margin-right:3px;">💬</button>
-      <button class="btn btn-ghost" style="padding:6px 10px;font-size:12px;margin-right:3px;" onclick="editFrete(${fr.id})">✏️</button>
-      <button class="btn btn-danger" style="padding:6px 10px;font-size:12px;" onclick="delFrete(${fr.id})">🗑️</button>
-    </td>
-  </tr>`;}).join("")}
-  </tbody></table></div></div>`;
-}
-
-
-function updateFretePreview(){
-  const km=parseFloat(document.getElementById("frete-sim-km")?.value||"5");
-  const valorKm=parseFloat(document.getElementById("frete-km-val")?.value||"2.50");
-  const base=parseFloat(document.getElementById("frete-base-val")?.value||"0");
-  const total=(base+(km*valorKm)).toFixed(2);
-  const el=document.getElementById("frete-sim-result");
-  const elDist=document.getElementById("frete-sim-dist");
-  if(el)el.textContent="R$ "+total;
-  if(elDist)elDist.textContent=km.toFixed(1);
-}
-
-
-function saveFreteConfig(){
-  DB.configuracoes.valorKmFrete=document.getElementById("frete-km-val")?.value||"2.50";
-  DB.configuracoes.taxaBaseFrete=document.getElementById("frete-base-val")?.value||"0";
-  saveDB();showToast("✅ Configuração de frete salva!","var(--green)");
-}
-
-
-function freteForm(fr={}){
-  const cliOpts=DB.clientes.map(c=>`<option value="${esc(c.id)}"${String(c.id)===String(fr.clienteId)?` selected`:""}>${esc(c.nome)}</option>`).join("");
-  const petOpts=DB.pets.filter(p=>!fr.clienteId||String(p.clienteId)===String(fr.clienteId)).map(p=>`<option value="${esc(p.id)}"${String(p.id)===String(fr.petId)?` selected`:""}>${esc(p.nome)}</option>`).join("");
-  const hora=fr.hora||"08:00";
-  return`
-  <div class="field-group">
-    <div><label>Data *</label><input type="date" id="fr-data" value="${esc(fr.data||today())}"/></div>
-    <div><label>Hora</label><input type="time" id="fr-hora" value="${esc(hora)}"/></div>
-  </div>
-  <div class="field-group">
-    <div><label>Cliente *</label>
-      <select id="fr-clienteId" onchange="updateFretePets()">
-        <option value="">Selecione...</option>${cliOpts}
-      </select>
-    </div>
-    <div><label>Pet *</label>
-      <select id="fr-petId"><option value="">Selecione...</option>${petOpts}</select>
-    </div>
-  </div>
-  <div><label>Endereço de Coleta *</label><input id="fr-end" value="${esc(fr.endereco||"")}" placeholder="Rua, número, bairro, cidade"/></div>
-  <div class="field-group mt12">
-    <div>
-      <label>📍 Distância (km)</label>
-      <input type="number" id="fr-dist" value="${esc(fr.distancia||"")}" step="0.1" min="0" oninput="calcFreteAuto()"/>
-    </div>
-    <div>
-      <label>💰 Valor do Frete (R$)</label>
-      <input type="number" id="fr-valor" value="${esc(fr.valor||"")}" step="0.50" min="0"/>
-      <div class="text-xs text-muted mt8">Calculado automaticamente ao informar distância, ou informe manualmente.</div>
-    </div>
-  </div>
-  <div class="field-group">
-    <div><label>Status</label>
-      <select id="fr-status">${["Pendente","Em rota","Concluído","Cancelado"].map(s=>`<option${s===(fr.status||"Pendente")?" selected":""}>${s}</option>`).join("")}</select>
-    </div>
-    <div><label>Funcionário Responsável</label>
-      <select id="fr-func"><option value="">Selecione...</option>${DB.funcionarios.map(f=>`<option${f.nome===fr.funcionario?" selected":""}>${esc(f.nome)}</option>`).join("")}</select>
-    </div>
-  </div>
-  <div><label>Observações</label><input id="fr-obs" value="${esc(fr.obs||"")}"/></div>`;
-}
-
-
-function updateFretePets(){
-  const cid=document.getElementById("fr-clienteId")?.value;
-  const sel=document.getElementById("fr-petId");if(!sel)return;
-  sel.innerHTML=`<option value="">Selecione...</option>`+
-    DB.pets.filter(p=>!cid||String(p.clienteId)===String(cid)).map(p=>`<option value="${p.id}">${esc(p.nome)}</option>`).join("");
-  // Auto fill address from client
-  const cli=DB.clientes.find(c=>String(c.id)===cid);
-  if(cli&&cli.endereco&&document.getElementById("fr-end"))
-    document.getElementById("fr-end").value=cli.endereco;
-}
-
-
-function calcFreteAuto(){
-  const dist=parseFloat(document.getElementById("fr-dist")?.value||"0");
-  if(dist>0){
-    const val=calcFrete(dist);
-    if(document.getElementById("fr-valor"))document.getElementById("fr-valor").value=val;
-  }
-}
-
-
-function openAddFrete(){
-  openModal("🚗 Nova Coleta em Domicílio",freteForm(),()=>{
-    const cId=document.getElementById("fr-clienteId").value;
-    const pId=document.getElementById("fr-petId").value;
-    const end=document.getElementById("fr-end").value.trim();
-    if(!cId||!pId||!end){showToast("❌ Cliente, pet e endereço obrigatórios","var(--rose)");return;}
-    const cli=DB.clientes.find(c=>String(c.id)===cId)||{};
-    const pet=DB.pets.find(p=>String(p.id)===pId)||{};
-    const valor=document.getElementById("fr-valor").value||calcFrete(parseFloat(document.getElementById("fr-dist")?.value||0));
-    const newFr={id:uid(),data:document.getElementById("fr-data").value,hora:document.getElementById("fr-hora").value,
-      clienteId:cId,petId:pId,cliente:cli.nome,pet:pet.nome,
-      endereco:end,distancia:document.getElementById("fr-dist").value,
-      valor,status:document.getElementById("fr-status").value||"Pendente",
-      funcionario:document.getElementById("fr-func").value,obs:document.getElementById("fr-obs").value};
-    if(!DB.fretes)DB.fretes=[];
-    DB.fretes.push(newFr);
-    // Add to caixa
-    DB.caixa.push({data:newFr.data,descricao:`Frete - ${pet.nome}`,cliente:cli.nome,pet:pet.nome,pagamento:"A definir",entrada:valor,saida:"",saldo:valor});
-    saveDB();closeModal();renderPage("frete");showToast("✅ Coleta registrada!");
-    if(DB.configuracoes.notifAgendamento){setTimeout(()=>waMsgFrete(newFr.id),500);}
-  });
-}
-
-function editFrete(id){
-  const fr=(DB.fretes||[]).find(x=>x.id===id);if(!fr)return;
-  openModal("✏️ Editar Coleta",freteForm(fr),()=>{
-    const cli=DB.clientes.find(c=>String(c.id)===document.getElementById("fr-clienteId").value)||{};
-    const pet=DB.pets.find(p=>String(p.id)===document.getElementById("fr-petId").value)||{};
-    Object.assign(fr,{data:document.getElementById("fr-data").value,hora:document.getElementById("fr-hora").value,
-      clienteId:document.getElementById("fr-clienteId").value,petId:document.getElementById("fr-petId").value,
-      cliente:cli.nome,pet:pet.nome,endereco:document.getElementById("fr-end").value,
-      distancia:document.getElementById("fr-dist").value,valor:document.getElementById("fr-valor").value,
-      status:document.getElementById("fr-status").value,funcionario:document.getElementById("fr-func").value,
-      obs:document.getElementById("fr-obs").value});
-    saveDB();closeModal();renderPage("frete");showToast("✅ Atualizado!");
-  });
-}
-
-function delFrete(id){
-  if(confirm("Remover coleta?")){DB.fretes=(DB.fretes||[]).filter(f=>f.id!==id);saveDB();renderPage("frete");showToast("🗑️ Removido","var(--rose)");}
-}
-
-function waMsgFrete(id){
-  const fr=(DB.fretes||[]).find(f=>f.id===id);if(!fr)return;
-  const cli=DB.clientes.find(c=>String(c.id)===String(fr.clienteId)||c.nome===fr.cliente);
-  const msg=buildMsg(DB.configuracoes.msgFrete||"",{
-    cliente:fr.cliente,pet:fr.pet,endereco:fr.endereco,data:fmtDate(fr.data),hora:fr.hora,
-    valor:fr.valor,clinica:DB.configuracoes.nomeClinica});
-  openWA(cli?.whatsapp||"",msg);
-}
-
-// ==========================================================
-// INTERNAÇÃO
-// ==========================================================
-
-function pageInternacao(){
-  const ints=DB.internacoes||[];
-  const ativos=ints.filter(i=>i.status==="Internado");
-  const totalRec=ints.reduce((s,i)=>s+parseFloat(i.valorTotal||0),0);
-  return`
-  <div class="page-header">
-    <div><div class="page-title">🏥 Internação</div>
-    <div class="page-sub">${ints.length} registro(s) · <span style="color:var(--rose)">${ativos.length} internado(s) agora</span></div></div>
-    <button class="btn btn-accent" onclick="openAddInternacao()">+ Nova Internação</button>
-  </div>
-
-  <div class="stat-grid mb16">
-    <div class="stat-card"><div class="stat-icon" style="background:#f43f5e22">🏥</div><div><div class="stat-val">${ints.length}</div><div class="stat-label">Total Internações</div></div></div>
-    <div class="stat-card"><div class="stat-icon" style="background:#fbbf2422">🐾</div><div><div class="stat-val" style="color:var(--rose)">${ativos.length}</div><div class="stat-label">Internados Agora</div></div></div>
-    <div class="stat-card"><div class="stat-icon" style="background:#22c55e22">✅</div><div><div class="stat-val">${ints.filter(i=>i.status==="Alta").length}</div><div class="stat-label">Receberam Alta</div></div></div>
-    <div class="stat-card"><div class="stat-icon" style="background:#2dd4bf22">💰</div><div><div class="stat-val" style="font-size:16px;">R$ ${totalRec.toFixed(2)}</div><div class="stat-label">Total Receita</div></div></div>
-  </div>
-
-  ${ativos.length>0?`
-  <div class="card mb16" style="border-color:var(--rose);">
-    <div class="fw700 text-rose mb12" style="font-size:15px;">🚨 Internados no Momento</div>
-    ${ativos.map(i=>{
-      const diasInt=i.dataEntrada?Math.floor((new Date()-new Date(i.dataEntrada))/86400000):0;
-      return`<div style="background:var(--bg);border-radius:10px;padding:12px 14px;margin-bottom:8px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">
-        <div>
-          <div class="fw700 text-white">${esc(i.pet)} <span class="text-muted text-sm">— ${esc(i.cliente)}</span></div>
-          <div class="text-xs text-muted">Motivo: ${esc(i.motivo)} · Vet: ${esc(i.veterinario)} · ${diasInt} dia(s)</div>
-        </div>
-        <div style="display:flex;gap:8px;align-items:center;">
-          <span class="badge" style="background:var(--rose)22;color:var(--rose)">🏥 Internado</span>
-          <button class="btn btn-green" style="padding:6px 12px;font-size:12px;" onclick="altaInternacao(${i.id})">✅ Alta</button>
-        </div>
-      </div>`;}).join("")}
-  </div>`:""}
-
-  <div class="search-wrap mb16"><span class="search-icon">🔍</span>
-    <input id="search-int" placeholder="Buscar por pet, cliente ou motivo..." oninput="filterTable('search-int','tbody-int')"/>
-  </div>
-  <div class="card"><div class="tbl-wrap"><table><thead><tr>
-    <th>Pet</th><th>Cliente</th><th class="hide-mobile">Motivo</th><th>Entrada</th><th class="hide-mobile">Alta</th><th class="hide-mobile">Vet.</th><th>Status</th><th>Valor</th><th>Ações</th>
-  </tr></thead><tbody id="tbody-int">
-  ${ints.length===0?'<tr><td colspan="9" style="text-align:center;color:var(--muted);padding:24px;">Nenhuma internação registrada</td></tr>':""}
-  ${[...ints].sort((a,b)=>(b.dataEntrada||"").localeCompare(a.dataEntrada||"")).map(i=>{
-    const stColor=i.status==="Internado"?"var(--rose)":i.status==="Alta"?"var(--green)":"var(--amber)";
-    return`<tr>
-    <td class="fw700 text-white">${esc(i.pet)}</td>
-    <td>${esc(i.cliente)}</td>
-    <td class="hide-mobile text-muted">${esc(i.motivo)}</td>
-    <td>${fmtDate(i.dataEntrada)}</td>
-    <td class="hide-mobile">${i.dataSaida?fmtDate(i.dataSaida):'<span class="text-muted">—</span>'}</td>
-    <td class="hide-mobile text-muted">${esc(i.veterinario||"—")}</td>
-    <td><span class="badge" style="background:${stColor}22;color:${stColor}">${esc(i.status)}</span></td>
-    <td class="fw700 text-green">${i.valorTotal?'R$ '+esc(i.valorTotal):'<span class="text-muted">—</span>'}</td>
-    <td style="white-space:nowrap">
-      <button onclick="waMsgInternacao(${i.id})" title="WhatsApp" style="background:#128C7E22;color:#25D366;border:none;border-radius:8px;padding:6px 9px;font-size:14px;cursor:pointer;margin-right:3px;">💬</button>
-      <button class="btn btn-ghost" style="padding:6px 10px;font-size:12px;margin-right:3px;" onclick="editInternacao(${i.id})">✏️</button>
-      <button class="btn btn-danger" style="padding:6px 10px;font-size:12px;" onclick="delInternacao(${i.id})">🗑️</button>
-    </td>
-  </tr>`;}).join("")}
-  </tbody></table></div></div>`;
-}
-
-
-function internacaoForm(i={}){
-  const cliOpts=DB.clientes.map(c=>`<option value="${esc(c.id)}"${String(c.id)===String(i.clienteId)?` selected`:""}>${esc(c.nome)}</option>`).join("");
-  const petOpts=DB.pets.filter(p=>!i.clienteId||String(p.clienteId)===String(i.clienteId)).map(p=>`<option value="${esc(p.id)}"${String(p.id)===String(i.petId)?` selected`:""}>${esc(p.nome)}</option>`).join("");
-  return`
-  <div class="field-group">
-    <div><label>Cliente *</label>
-      <select id="int-clienteId" onchange="updateIntPets()">
-        <option value="">Selecione...</option>${cliOpts}
-      </select>
-    </div>
-    <div><label>Pet *</label>
-      <select id="int-petId"><option value="">Selecione...</option>${petOpts}</select>
-    </div>
-  </div>
-  <div><label>Motivo / Diagnóstico *</label><textarea id="int-motivo" rows="2" style="resize:vertical;">${esc(i.motivo||"")}</textarea></div>
-  <div class="field-group mt12">
-    <div><label>Data de Entrada</label><input type="date" id="int-entrada" value="${esc(i.dataEntrada||today())}"/></div>
-    <div><label>Previsão de Alta</label><input type="date" id="int-saida" value="${esc(i.dataSaida||"")}"/></div>
-  </div>
-  <div class="field-group">
-    <div><label>Veterinário Responsável</label>
-      <select id="int-vet"><option value="">Selecione...</option>${DB.funcionarios.filter(f=>f.cargo==="Veterinário"||f.cargo==="Veterinária").map(f=>`<option${f.nome===i.veterinario?" selected":""}>${esc(f.nome)}</option>`).join("")}${DB.funcionarios.filter(f=>f.cargo!=="Veterinário"&&f.cargo!=="Veterinária").map(f=>`<option${f.nome===i.veterinario?" selected":""}>${esc(f.nome)}</option>`).join("")}</select>
-    </div>
-    <div><label>Status</label>
-      <select id="int-status">${["Internado","Alta","Obs. Ambulatorial","Transferido"].map(s=>`<option${s===(i.status||"Internado")?" selected":""}>${s}</option>`).join("")}</select>
-    </div>
-  </div>
-  <div class="field-group">
-    <div><label>Valor Diária (R$)</label><input type="number" id="int-diaria" value="${esc(i.valorDiaria||"")}" step="0.50" oninput="calcInternacaoTotal()"/></div>
-    <div><label>Valor Total (R$)</label><input type="number" id="int-total" value="${esc(i.valorTotal||"")}" step="0.50"/></div>
-  </div>
-  <div><label>Observações / Evolução</label><textarea id="int-obs" rows="3" style="resize:vertical;">${esc(i.obs||"")}</textarea></div>`;
-}
-
-function calcInternacaoTotal(){
-  const entrada=document.getElementById("int-entrada")?.value;
-  const saida=document.getElementById("int-saida")?.value;
-  const diaria=parseFloat(document.getElementById("int-diaria")?.value||"0");
-  if(entrada&&saida&&diaria){
-    const dias=Math.max(1,Math.round((new Date(saida)-new Date(entrada))/86400000));
-    if(document.getElementById("int-total"))document.getElementById("int-total").value=(dias*diaria).toFixed(2);
-  }
-}
-
-function openAddInternacao(){
-  openModal("🏥 Nova Internação",internacaoForm(),()=>{
-    const cId=document.getElementById("int-clienteId").value;
-    const pId=document.getElementById("int-petId").value;
-    const motivo=document.getElementById("int-motivo").value.trim();
-    if(!cId||!pId||!motivo){showToast("❌ Cliente, pet e motivo obrigatórios","var(--rose)");return;}
-    const cli=DB.clientes.find(c=>String(c.id)===cId)||{};
-    const pet=DB.pets.find(p=>String(p.id)===pId)||{};
-    const newInt={id:uid(),clienteId:cId,petId:pId,cliente:cli.nome,pet:pet.nome,
-      motivo,dataEntrada:document.getElementById("int-entrada").value,
-      dataSaida:document.getElementById("int-saida").value,
-      veterinario:document.getElementById("int-vet").value,
-      status:document.getElementById("int-status").value||"Internado",
-      valorDiaria:document.getElementById("int-diaria").value,
-      valorTotal:document.getElementById("int-total").value,
-      obs:document.getElementById("int-obs").value};
-    if(!DB.internacoes)DB.internacoes=[];
-    DB.internacoes.push(newInt);
-    if(newInt.valorTotal)DB.caixa.push({data:newInt.dataEntrada,descricao:`Internação - ${pet.nome}`,cliente:cli.nome,pet:pet.nome,pagamento:"A definir",entrada:newInt.valorTotal,saida:"",saldo:newInt.valorTotal});
-    saveDB();closeModal();renderPage("internacao");showToast("✅ Internação registrada!");
-    setTimeout(()=>waMsgInternacao(newInt.id),500);
-  });
-}
-
-function editInternacao(id){
-  const i=(DB.internacoes||[]).find(x=>x.id===id);if(!i)return;
-  openModal("✏️ Editar Internação",internacaoForm(i),()=>{
-    const cli=DB.clientes.find(c=>String(c.id)===document.getElementById("int-clienteId").value)||{};
-    const pet=DB.pets.find(p=>String(p.id)===document.getElementById("int-petId").value)||{};
-    Object.assign(i,{clienteId:document.getElementById("int-clienteId").value,petId:document.getElementById("int-petId").value,
-      cliente:cli.nome,pet:pet.nome,motivo:document.getElementById("int-motivo").value,
-      dataEntrada:document.getElementById("int-entrada").value,dataSaida:document.getElementById("int-saida").value,
-      veterinario:document.getElementById("int-vet").value,status:document.getElementById("int-status").value,
-      valorDiaria:document.getElementById("int-diaria").value,valorTotal:document.getElementById("int-total").value,
-      obs:document.getElementById("int-obs").value});
-    saveDB();closeModal();renderPage("internacao");showToast("✅ Atualizado!");
-  });
-}
-
-function altaInternacao(id){
-  const i=(DB.internacoes||[]).find(x=>x.id===id);if(!i)return;
-  i.status="Alta";i.dataSaida=today();saveDB();renderPage("internacao");showToast("✅ Alta registrada!","var(--green)");
-}
-
-function delInternacao(id){
-  if(confirm("Remover internação?")){DB.internacoes=(DB.internacoes||[]).filter(i=>i.id!==id);saveDB();renderPage("internacao");showToast("🗑️ Removido","var(--rose)");}
-}
-
-function waMsgInternacao(id){
-  const i=(DB.internacoes||[]).find(x=>x.id===id);if(!i)return;
-  const cli=DB.clientes.find(c=>c.nome===i.cliente);
-  const msg=buildMsg(DB.configuracoes.msgInternacao||"",{
-    cliente:i.cliente,pet:i.pet,motivo:i.motivo,data:fmtDate(i.dataEntrada),vet:i.veterinario||"",
-    clinica:DB.configuracoes.nomeClinica});
-  openWA(cli?.whatsapp||"",msg);
-}
-
-// ==========================================================
-// HOTEL PET
-// ==========================================================
-
-function pageHotel(){
-  const hoteis=DB.hoteis||[];
-  const ativos=hoteis.filter(h=>h.status==="Hospedado");
-  const totalRec=hoteis.reduce((s,h)=>s+parseFloat(h.valorTotal||0),0);
-  return`
-  <div class="page-header">
-    <div><div class="page-title">🏨 Hotel Pet</div>
-    <div class="page-sub">${hoteis.length} hospedagem(ns) · <span style="color:var(--teal)">${ativos.length} hospedado(s) agora</span></div></div>
-    <button class="btn btn-accent" onclick="openAddHotel()">+ Check-in</button>
-  </div>
-
-  <div class="stat-grid mb16">
-    <div class="stat-card"><div class="stat-icon" style="background:#2dd4bf22">🏨</div><div><div class="stat-val">${hoteis.length}</div><div class="stat-label">Total Hospedagens</div></div></div>
-    <div class="stat-card"><div class="stat-icon" style="background:#4f8ef722">🐾</div><div><div class="stat-val" style="color:var(--teal)">${ativos.length}</div><div class="stat-label">Hospedados Agora</div></div></div>
-    <div class="stat-card"><div class="stat-icon" style="background:#22c55e22">✅</div><div><div class="stat-val">${hoteis.filter(h=>h.status==="Check-out").length}</div><div class="stat-label">Check-outs</div></div></div>
-    <div class="stat-card"><div class="stat-icon" style="background:#fbbf2422">💰</div><div><div class="stat-val" style="font-size:16px;">R$ ${totalRec.toFixed(2)}</div><div class="stat-label">Receita Hotel</div></div></div>
-  </div>
-
-  ${ativos.length>0?`
-  <div class="card mb16" style="border-color:var(--teal);">
-    <div class="fw700 mb12" style="font-size:15px;color:var(--teal);">🐾 Hóspedes no Momento</div>
-    ${ativos.map(h=>{
-      const diasTotal=h.checkin&&h.checkout?Math.max(1,Math.round((new Date(h.checkout)-new Date(h.checkin))/86400000)):0;
-      const diasRestantes=h.checkout?Math.max(0,Math.round((new Date(h.checkout)-new Date())/86400000)):0;
-      return`<div style="background:var(--bg);border-radius:10px;padding:12px 14px;margin-bottom:8px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">
-        <div>
-          <div class="fw700 text-white">${esc(h.pet)} <span class="text-muted text-sm">— ${esc(h.cliente)}</span></div>
-          <div class="text-xs text-muted">Check-in: ${fmtDate(h.checkin)} · Checkout: ${fmtDate(h.checkout)} · ${diasTotal} dia(s) · ${diasRestantes} dia(s) restante(s)</div>
-        </div>
-        <div style="display:flex;gap:8px;align-items:center;">
-          <span class="badge" style="background:var(--teal)22;color:var(--teal)">🏨 Hospedado</span>
-          <button class="btn btn-accent" style="padding:6px 12px;font-size:12px;" onclick="checkoutHotel(${h.id})">🚪 Check-out</button>
-        </div>
-      </div>`;}).join("")}
-  </div>`:""}
-
-  <div class="search-wrap mb16"><span class="search-icon">🔍</span>
-    <input id="search-hotel" placeholder="Buscar por pet, cliente ou observação..." oninput="filterTable('search-hotel','tbody-hotel')"/>
-  </div>
-  <div class="card"><div class="tbl-wrap"><table><thead><tr>
-    <th>Pet</th><th>Cliente</th><th>Check-in</th><th>Check-out</th><th class="hide-mobile">Dias</th><th class="hide-mobile">Diária</th><th>Total</th><th>Status</th><th>Ações</th>
-  </tr></thead><tbody id="tbody-hotel">
-  ${hoteis.length===0?'<tr><td colspan="9" style="text-align:center;color:var(--muted);padding:24px;">Nenhuma hospedagem registrada</td></tr>':""}
-  ${[...hoteis].sort((a,b)=>(b.checkin||"").localeCompare(a.checkin||"")).map(h=>{
-    const dias=h.checkin&&h.checkout?Math.max(1,Math.round((new Date(h.checkout)-new Date(h.checkin))/86400000)):1;
-    const stColor=h.status==="Hospedado"?"var(--teal)":h.status==="Check-out"?"var(--green)":"var(--muted)";
-    return`<tr>
-    <td class="fw700 text-white">${esc(h.pet)}</td>
-    <td>${esc(h.cliente)}</td>
-    <td>${fmtDate(h.checkin)}</td>
-    <td>${fmtDate(h.checkout)}</td>
-    <td class="hide-mobile text-muted">${dias} dia(s)</td>
-    <td class="hide-mobile text-muted">${h.valorDiaria?'R$ '+esc(h.valorDiaria):'—'}</td>
-    <td class="fw700 text-green">${h.valorTotal?'R$ '+esc(h.valorTotal):'—'}</td>
-    <td><span class="badge" style="background:${stColor}22;color:${stColor}">${esc(h.status)}</span></td>
-    <td style="white-space:nowrap">
-      <button onclick="waMsgHotel(${h.id})" title="WhatsApp" style="background:#128C7E22;color:#25D366;border:none;border-radius:8px;padding:6px 9px;font-size:14px;cursor:pointer;margin-right:3px;">💬</button>
-      <button class="btn btn-ghost" style="padding:6px 10px;font-size:12px;margin-right:3px;" onclick="editHotel(${h.id})">✏️</button>
-      <button class="btn btn-danger" style="padding:6px 10px;font-size:12px;" onclick="delHotel(${h.id})">🗑️</button>
-    </td>
-  </tr>`;}).join("")}
-  </tbody></table></div></div>`;
-}
-
-
-function hotelForm(h={}){
-  const cliOpts=DB.clientes.map(c=>`<option value="${esc(c.id)}"${String(c.id)===String(h.clienteId)?` selected`:""}>${esc(c.nome)}</option>`).join("");
-  const petOpts=DB.pets.filter(p=>!h.clienteId||String(p.clienteId)===String(h.clienteId)).map(p=>`<option value="${esc(p.id)}"${String(p.id)===String(h.petId)?` selected`:""}>${esc(p.nome)}</option>`).join("");
-  return`
-  <div class="field-group">
-    <div><label>Cliente *</label>
-      <select id="ht-clienteId" onchange="updateHotelPets()">
-        <option value="">Selecione...</option>${cliOpts}
-      </select>
-    </div>
-    <div><label>Pet *</label>
-      <select id="ht-petId"><option value="">Selecione...</option>${petOpts}</select>
-    </div>
-  </div>
-  <div class="field-group">
-    <div><label>Data Check-in *</label><input type="date" id="ht-checkin" value="${esc(h.checkin||today())}" oninput="calcHotelTotal()"/></div>
-    <div><label>Data Check-out *</label><input type="date" id="ht-checkout" value="${esc(h.checkout||"")}" oninput="calcHotelTotal()"/></div>
-  </div>
-  <div class="field-group">
-    <div>
-      <label>💰 Valor Diária (R$)</label>
-      <input type="number" id="ht-diaria" value="${esc(h.valorDiaria||"")}" step="0.50" oninput="calcHotelTotal()"/>
-    </div>
-    <div>
-      <label>💰 Valor Total (R$)</label>
-      <input type="number" id="ht-total" value="${esc(h.valorTotal||"")}" step="0.50"/>
-      <div class="text-xs text-muted mt8">Calculado automaticamente.</div>
-    </div>
-  </div>
-  <div class="field-group">
-    <div><label>Status</label>
-      <select id="ht-status">${["Hospedado","Check-out","Reservado","Cancelado"].map(s=>`<option${s===(h.status||"Hospedado")?" selected":""}>${s}</option>`).join("")}</select>
-    </div>
-    <div><label>Forma de Pagamento</label>
-      <select id="ht-pag">${["Dinheiro","Pix","Cartão","A definir"].map(p=>`<option${p===(h.pagamento||"A definir")?" selected":""}>${p}</option>`).join("")}</select>
-    </div>
-  </div>
-  <div><label>Observações / Cuidados Especiais</label><textarea id="ht-obs" rows="3" style="resize:vertical;">${esc(h.obs||"")}</textarea></div>`;
-}
-
-function updateHotelPets(){
-  const cid=document.getElementById("ht-clienteId")?.value;
-  const sel=document.getElementById("ht-petId");if(!sel)return;
-  sel.innerHTML=`<option value="">Selecione...</option>`+
-    DB.pets.filter(p=>!cid||String(p.clienteId)===String(cid)).map(p=>`<option value="${p.id}">${esc(p.nome)}</option>`).join("");
-}
-
-function calcHotelTotal(){
-  const checkin=document.getElementById("ht-checkin")?.value;
-  const checkout=document.getElementById("ht-checkout")?.value;
-  const diaria=parseFloat(document.getElementById("ht-diaria")?.value||"0");
-  if(checkin&&checkout&&diaria){
-    const dias=Math.max(1,Math.round((new Date(checkout)-new Date(checkin))/86400000));
-    if(document.getElementById("ht-total"))document.getElementById("ht-total").value=(dias*diaria).toFixed(2);
-  }
-}
-
-function openAddHotel(){
-  openModal("🏨 Check-in Hotel Pet",hotelForm(),()=>{
-    const cId=document.getElementById("ht-clienteId").value;
-    const pId=document.getElementById("ht-petId").value;
-    const checkin=document.getElementById("ht-checkin").value;
-    const checkout=document.getElementById("ht-checkout").value;
-    if(!cId||!pId||!checkin){showToast("❌ Cliente, pet e check-in obrigatórios","var(--rose)");return;}
-    const cli=DB.clientes.find(c=>String(c.id)===cId)||{};
-    const pet=DB.pets.find(p=>String(p.id)===pId)||{};
-    const dias=checkin&&checkout?Math.max(1,Math.round((new Date(checkout)-new Date(checkin))/86400000)):1;
-    const newH={id:uid(),clienteId:cId,petId:pId,cliente:cli.nome,pet:pet.nome,
-      checkin,checkout,dias,
-      valorDiaria:document.getElementById("ht-diaria").value,
-      valorTotal:document.getElementById("ht-total").value,
-      status:document.getElementById("ht-status").value||"Hospedado",
-      pagamento:document.getElementById("ht-pag").value,
-      obs:document.getElementById("ht-obs").value};
-    if(!DB.hoteis)DB.hoteis=[];
-    DB.hoteis.push(newH);
-    if(newH.valorTotal)DB.caixa.push({data:checkin,descricao:`Hotel Pet - ${pet.nome}`,cliente:cli.nome,pet:pet.nome,pagamento:newH.pagamento,entrada:newH.valorTotal,saida:"",saldo:newH.valorTotal});
-    saveDB();closeModal();renderPage("hotel");showToast("✅ Check-in realizado!");
-    setTimeout(()=>waMsgHotel(newH.id),500);
-  });
-}
-
-function editHotel(id){
-  const h=(DB.hoteis||[]).find(x=>x.id===id);if(!h)return;
-  openModal("✏️ Editar Hospedagem",hotelForm(h),()=>{
-    const cli=DB.clientes.find(c=>String(c.id)===document.getElementById("ht-clienteId").value)||{};
-    const pet=DB.pets.find(p=>String(p.id)===document.getElementById("ht-petId").value)||{};
-    const checkin=document.getElementById("ht-checkin").value;
-    const checkout=document.getElementById("ht-checkout").value;
-    const dias=checkin&&checkout?Math.max(1,Math.round((new Date(checkout)-new Date(checkin))/86400000)):1;
-    Object.assign(h,{clienteId:document.getElementById("ht-clienteId").value,petId:document.getElementById("ht-petId").value,
-      cliente:cli.nome,pet:pet.nome,checkin,checkout,dias,
-      valorDiaria:document.getElementById("ht-diaria").value,valorTotal:document.getElementById("ht-total").value,
-      status:document.getElementById("ht-status").value,pagamento:document.getElementById("ht-pag").value,
-      obs:document.getElementById("ht-obs").value});
-    saveDB();closeModal();renderPage("hotel");showToast("✅ Atualizado!");
-  });
-}
-
-function checkoutHotel(id){
-  const h=(DB.hoteis||[]).find(x=>x.id===id);if(!h)return;
-  h.status="Check-out";h.checkout=h.checkout||today();saveDB();renderPage("hotel");showToast("✅ Check-out realizado!","var(--green)");
-}
-
-function delHotel(id){
-  if(confirm("Remover hospedagem?")){DB.hoteis=(DB.hoteis||[]).filter(h=>h.id!==id);saveDB();renderPage("hotel");showToast("🗑️ Removido","var(--rose)");}
-}
-
-function waMsgHotel(id){
-  const h=(DB.hoteis||[]).find(x=>x.id===id);if(!h)return;
-  const cli=DB.clientes.find(c=>c.nome===h.cliente);
-  const dias=h.checkin&&h.checkout?Math.max(1,Math.round((new Date(h.checkout)-new Date(h.checkin))/86400000)):1;
-  const msg=buildMsg(DB.configuracoes.msgHotel||"",{
-    cliente:h.cliente,pet:h.pet,checkin:fmtDate(h.checkin),checkout:fmtDate(h.checkout),
-    dias:String(dias),valor:h.valorTotal||"—",clinica:DB.configuracoes.nomeClinica});
-  openWA(cli?.whatsapp||"",msg);
-}
-
-// ==========================================================
-// PATCH DASHBOARD — add new stats
-// ==========================================================
-const _origDash = pageDashboard;
-pageDashboard = function(){
-  let html = _origDash();
-  // Inject new stats after existing stat-grid if possible
-  const hotelAtivos=(DB.hoteis||[]).filter(h=>h.status==="Hospedado").length;
-  const intAtivos=(DB.internacoes||[]).filter(i=>i.status==="Internado").length;
-  const fretesPend=(DB.fretes||[]).filter(f=>f.status==="Pendente").length;
-  const extraStats=`
-  <div class="stat-grid" style="margin-bottom:24px;">
-    <div class="stat-card" style="cursor:pointer;" onclick="navTo('hotel')"><div class="stat-icon" style="background:#2dd4bf22">🏨</div><div><div class="stat-val">${hotelAtivos}</div><div class="stat-label">No Hotel Agora</div></div></div>
-    <div class="stat-card" style="cursor:pointer;" onclick="navTo('internacao')"><div class="stat-icon" style="background:#f43f5e22">🏥</div><div><div class="stat-val">${intAtivos}</div><div class="stat-label">Internados</div></div></div>
-    <div class="stat-card" style="cursor:pointer;" onclick="navTo('frete')"><div class="stat-icon" style="background:#4f8ef722">🚗</div><div><div class="stat-val">${fretesPend}</div><div class="stat-label">Fretes Pendentes</div></div></div>
-  </div>`;
-  // Insert after first </div> closing the stat-grid
-  const _mk='</div>\n  <div style="display:grid';
-  return html.replace(_mk, extraStats+_mk);
-};
-
-// ==========================================================
-// PATCH CONFIGURACOES — add email and frete config
-// ==========================================================
-const _origConfig = pageConfiguracoes;
-pageConfiguracoes = function(){
-  let html = _origConfig();
-  // Inject after the first card (password section) if possible
-  const emailSection = `
-  <div class="card mb16" style="border-color:var(--accent);">
-    <div class="fw700 text-white mb12" style="font-size:15px;">📧 E-mail para Recuperação de Senha</div>
-    <div style="background:#0d1a2a;border:1px solid var(--accent);border-radius:10px;padding:12px 14px;margin-bottom:12px;font-size:13px;color:var(--muted);">
-      ℹ️ Cada funcionário pode cadastrar seu e-mail nos dados de perfil (seção Funcionários). O e-mail é usado para recuperar a senha na tela de login.
-    </div>
-    <div class="text-sm text-muted">Para editar o e-mail de recuperação, acesse <strong style="color:var(--accent);">Funcionários</strong> e edite o campo E-mail do funcionário.</div>
-  </div>`;
-  // Patch the funcForm to add email field  
-  return emailSection + html;
-};
-
-// ==========================================================
-// PATCH funcForm to add email field
-// ==========================================================
-const _origFuncForm = funcForm;
-funcForm = function(f={}){
-  const original = _origFuncForm(f);
-  // Add email field before closing
-  const emailField = `
-  <div class="mb12"><label>📧 E-mail (para recuperação de senha)</label><input type="email" id="f-email" value="${esc(f.email||"")}" placeholder="funcionario@email.com"/></div>`;
-  return original + emailField;
-};
-// Patch openAddFunc and editFunc to save email
-const _origOpenAddFunc = openAddFunc;
-openAddFunc = function(){
-  openModal("Novo Funcionário",funcForm(),()=>{
-    const nome=document.getElementById("f-nome").value.trim();
-    const login=document.getElementById("f-login").value.trim();
-    if(!nome||!login){showToast("❌ Nome e login obrigatórios","var(--rose)");return;}
-    DB.funcionarios.push({id:uid(),nome,cargo:document.getElementById("f-cargo").value,
-      telefone:document.getElementById("f-tel").value,login,email:document.getElementById("f-email")?.value||"",
-      senha:document.getElementById("f-senha").value||"1234",
-      isAdmin:document.getElementById("f-admin").value==="true"});
-    saveDB();closeModal();renderPage("funcionarios");showToast("✅ Funcionário adicionado!");
-  });
-};
-const _origEditFunc = editFunc;
-editFunc = function(id){
-  const f=DB.funcionarios.find(x=>x.id===id);if(!f)return;
-  openModal("Editar Funcionário",funcForm(f),()=>{
-    const s=document.getElementById("f-senha").value;
-    Object.assign(f,{nome:document.getElementById("f-nome").value,cargo:document.getElementById("f-cargo").value,
-      telefone:document.getElementById("f-tel").value,login:document.getElementById("f-login").value,
-      email:document.getElementById("f-email")?.value||f.email||"",
-      isAdmin:document.getElementById("f-admin").value==="true"});
-    if(s)f.senha=s;
-    saveDB();closeModal();renderPage("funcionarios");showToast("✅ Atualizado!");
-  });
-};
-
-// ==========================================================
-// PATCH notifCount for new modules
-// ==========================================================
-const _origNotifCount = notifCount;
-notifCount = function(){
-  const base = _origNotifCount();
-  const fretesPend=(DB.fretes||[]).filter(f=>f.status==="Pendente").length;
-  const intAtivos=(DB.internacoes||[]).filter(i=>i.status==="Internado").length;
-  return base + fretesPend + intAtivos;
-};
-
-// ==========================================================
-// PWA MANIFEST + SERVICE WORKER (para instalar como app)
-// ==========================================================
-// Registrar Service Worker para offline e instalação como PWA
-if ('serviceWorker' in navigator) {
-  window.addEventListener('load', () => {
-    // SW inline via blob
-    const swCode=`const C='psc-v4';self.addEventListener('install',e=>{e.waitUntil(caches.open(C).then(c=>c.add('/')).then(()=>self.skipWaiting()));});self.addEventListener('activate',e=>{e.waitUntil(caches.keys().then(ks=>Promise.all(ks.filter(k=>k!==C).map(k=>caches.delete(k)))).then(()=>self.clients.claim()));});self.addEventListener('fetch',e=>{if(e.request.method!=='GET')return;e.respondWith(caches.match(e.request).then(r=>r||fetch(e.request).catch(()=>caches.match('/'))));});`;
-    try{const b=new Blob([swCode],{type:'application/javascript'});navigator.serviceWorker.register(URL.createObjectURL(b)).catch(()=>{});}catch(e){}
-  });
-}
-
-// Add beforeinstallprompt for Android/Chrome install
-let deferredPrompt = null;
-window.addEventListener('beforeinstallprompt', (e) => {
-  e.preventDefault();
-  deferredPrompt = e;
-  // Show install button in topbar
-  const installBtn = document.getElementById('install-app-btn');
-  if(installBtn) installBtn.style.display = 'flex';
-});
-
-
 </script>
 </body>
 </html>
