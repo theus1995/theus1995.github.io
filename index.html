@@ -421,9 +421,9 @@ function loadDB(){
     const s=localStorage.getItem("petshop_colosso");
     if(s){
       DB=JSON.parse(s);
-      // Migrações: garante que todos os arrays existem
       if(!DB.configuracoes)DB.configuracoes=Object.assign({},INITIAL.configuracoes);
-      if(!DB.funcionarios||!Array.isArray(DB.funcionarios)||DB.funcionarios.length===0)DB.funcionarios=JSON.parse(JSON.stringify(INITIAL.funcionarios));
+      if(!DB.funcionarios||!Array.isArray(DB.funcionarios)||DB.funcionarios.length===0)
+        DB.funcionarios=JSON.parse(JSON.stringify(INITIAL.funcionarios));
       if(!DB.clientes)DB.clientes=[];
       if(!DB.pets)DB.pets=[];
       if(!DB.servicos)DB.servicos=[];
@@ -2162,7 +2162,6 @@ function updateCloudStatus(state){
   if(!el)return;
   if(state==="connected"){el.style.display="flex";el.style.borderColor="var(--green)";ic.textContent="☁️";tx.textContent="Drive OK";tx.style.color="var(--green)";}
   else if(state==="syncing"){
-    // Trata syncing como conectado (sem exibir "Sincronizando...")
     el.style.display="flex";el.style.borderColor="var(--green)";
     ic.textContent="☁️";tx.textContent="Drive OK";tx.style.color="var(--green)";
   }
