@@ -477,8 +477,6 @@ function importExcel(inp){
   };
   reader.readAsArrayBuffer(file);
 }
-window.addEventListener("beforeunload",()=>exportToExcel(true));
-setInterval(()=>{if(currentUser)exportToExcel(true);},300000);
 
 // ==========================================================
 // HELPERS
